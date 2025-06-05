@@ -1,213 +1,62 @@
-#include "params.h"
 #include "consts.h"
+#include "params.h"
+
+.macro k_reduction in,out,zeta
+vpsrld      %xmm\zeta,%ymm\in,%ymm13     # t = a >> k
+vpand       %ymm1,%ymm13,%ymm14          # low = t AND 0xFFFF
+vpsrld      $16,%ymm13,%ymm13            # high = t >> 16
+vpsubd      %ymm13,%ymm14,%ymm\out       # low - high
+.endm
+
+.macro pointwise_mul a0,a1,b0,b1,out0,out1
+# Multiply a0*b0, a1*b1
+vpmulld     %ymm\a0,%ymm\b0,%ymm12       # a0 * b0
+vpmulld     %ymm\a1,%ymm\b1,%ymm13       # a1 * b1
+k_reduction 12,\out0,15                  # Reduce a0 * b0
+k_reduction 13,\out1,15                  # Reduce a1 * b1
+
+# Compute (a0 + a1)*(b0 + b1)
+vpaddd      %ymm\a0,%ymm\a1,%ymm12       # a0 + a1
+vpaddd      %ymm\b0,%ymm\b1,%ymm13       # b0 + b1
+vpmulld     %ymm12,%ymm13,%ymm12         # (a0 + a1)*(b0 + b1)
+k_reduction 12,14,15                     # Reduce p3
+
+# Compute p3 - p1 - p2
+vpsubd      %ymm\out0,%ymm14,%ymm14      # p3 - p1
+vpsubd      %ymm\out1,%ymm14,%ymm14      # p3 - p1 - p2
+.endm
 
 .text
-.global cdecl(pointwise_avx)
-cdecl(pointwise_avx):
-#consts
-vmovdqa		_8XQINV*4(%rcx),%ymm0
-vmovdqa		_8XQ*4(%rcx),%ymm1
-
-xor		%eax,%eax
-_looptop1:
-#load
-vmovdqa		(%rsi),%ymm2
-vmovdqa		32(%rsi),%ymm4
-vmovdqa		64(%rsi),%ymm6
-vmovdqa		(%rdx),%ymm10
-vmovdqa		32(%rdx),%ymm12
-vmovdqa		64(%rdx),%ymm14
-vpsrlq		$32,%ymm2,%ymm3
-vpsrlq		$32,%ymm4,%ymm5
-vmovshdup	%ymm6,%ymm7
-vpsrlq		$32,%ymm10,%ymm11
-vpsrlq		$32,%ymm12,%ymm13
-vmovshdup	%ymm14,%ymm15
-
-#mul
-vpmuldq		%ymm2,%ymm10,%ymm2
-vpmuldq		%ymm3,%ymm11,%ymm3
-vpmuldq		%ymm4,%ymm12,%ymm4
-vpmuldq		%ymm5,%ymm13,%ymm5
-vpmuldq		%ymm6,%ymm14,%ymm6
-vpmuldq		%ymm7,%ymm15,%ymm7
-
-#reduce
-vpmuldq		%ymm0,%ymm2,%ymm10
-vpmuldq		%ymm0,%ymm3,%ymm11
-vpmuldq		%ymm0,%ymm4,%ymm12
-vpmuldq		%ymm0,%ymm5,%ymm13
-vpmuldq		%ymm0,%ymm6,%ymm14
-vpmuldq		%ymm0,%ymm7,%ymm15
-vpmuldq		%ymm1,%ymm10,%ymm10
-vpmuldq		%ymm1,%ymm11,%ymm11
-vpmuldq		%ymm1,%ymm12,%ymm12
-vpmuldq		%ymm1,%ymm13,%ymm13
-vpmuldq		%ymm1,%ymm14,%ymm14
-vpmuldq		%ymm1,%ymm15,%ymm15
-vpsubq		%ymm10,%ymm2,%ymm2
-vpsubq		%ymm11,%ymm3,%ymm3
-vpsubq		%ymm12,%ymm4,%ymm4
-vpsubq		%ymm13,%ymm5,%ymm5
-vpsubq		%ymm14,%ymm6,%ymm6
-vpsubq		%ymm15,%ymm7,%ymm7
-vpsrlq		$32,%ymm2,%ymm2
-vpsrlq		$32,%ymm4,%ymm4
-vmovshdup	%ymm6,%ymm6
-
-#store
-vpblendd	$0xAA,%ymm3,%ymm2,%ymm2
-vpblendd	$0xAA,%ymm5,%ymm4,%ymm4
-vpblendd	$0xAA,%ymm7,%ymm6,%ymm6
-vmovdqa		%ymm2,(%rdi)
-vmovdqa		%ymm4,32(%rdi)
-vmovdqa		%ymm6,64(%rdi)
-
-add		$96,%rdi
-add		$96,%rsi
-add		$96,%rdx
-add		$1,%eax
-cmp		$10,%eax
-jb 		_looptop1
-
-vmovdqa		(%rsi),%ymm2
-vmovdqa		32(%rsi),%ymm4
-vmovdqa		(%rdx),%ymm10
-vmovdqa		32(%rdx),%ymm12
-vpsrlq		$32,%ymm2,%ymm3
-vpsrlq		$32,%ymm4,%ymm5
-vmovshdup	%ymm10,%ymm11
-vmovshdup	%ymm12,%ymm13
-
-#mul
-vpmuldq		%ymm2,%ymm10,%ymm2
-vpmuldq		%ymm3,%ymm11,%ymm3
-vpmuldq		%ymm4,%ymm12,%ymm4
-vpmuldq		%ymm5,%ymm13,%ymm5
-
-#reduce
-vpmuldq		%ymm0,%ymm2,%ymm10
-vpmuldq		%ymm0,%ymm3,%ymm11
-vpmuldq		%ymm0,%ymm4,%ymm12
-vpmuldq		%ymm0,%ymm5,%ymm13
-vpmuldq		%ymm1,%ymm10,%ymm10
-vpmuldq		%ymm1,%ymm11,%ymm11
-vpmuldq		%ymm1,%ymm12,%ymm12
-vpmuldq		%ymm1,%ymm13,%ymm13
-vpsubq		%ymm10,%ymm2,%ymm2
-vpsubq		%ymm11,%ymm3,%ymm3
-vpsubq		%ymm12,%ymm4,%ymm4
-vpsubq		%ymm13,%ymm5,%ymm5
-vpsrlq		$32,%ymm2,%ymm2
-vmovshdup	%ymm4,%ymm4
-
-#store
-vpblendd	$0x55,%ymm2,%ymm3,%ymm2
-vpblendd	$0x55,%ymm4,%ymm5,%ymm4
-vmovdqa		%ymm2,(%rdi)
-vmovdqa		%ymm4,32(%rdi)
-
-ret
-
-.macro pointwise off
-#load
-vmovdqa		\off(%rsi),%ymm6
-vmovdqa		\off+32(%rsi),%ymm8
-vmovdqa		\off(%rdx),%ymm10
-vmovdqa		\off+32(%rdx),%ymm12
-vpsrlq		$32,%ymm6,%ymm7
-vpsrlq		$32,%ymm8,%ymm9
-vmovshdup	%ymm10,%ymm11
-vmovshdup	%ymm12,%ymm13
-
-#mul
-vpmuldq		%ymm6,%ymm10,%ymm6
-vpmuldq		%ymm7,%ymm11,%ymm7
-vpmuldq		%ymm8,%ymm12,%ymm8
-vpmuldq		%ymm9,%ymm13,%ymm9
-.endm
-
-.macro acc
-vpaddq		%ymm6,%ymm2,%ymm2
-vpaddq		%ymm7,%ymm3,%ymm3
-vpaddq		%ymm8,%ymm4,%ymm4
-vpaddq		%ymm9,%ymm5,%ymm5
-.endm
-
 .global cdecl(pointwise_acc_avx)
-cdecl(pointwise_acc_avx):
-#consts
-vmovdqa		_8XQINV*4(%rcx),%ymm0
-vmovdqa		_8XQ*4(%rcx),%ymm1
+cdecl(ppointwise_acc_avx):
+# Load constants
+vmovdqa     _8XFFFF*4(%rcx),%ymm1        # Mask 0xFFFF
+vpxor       %ymm15,%ymm15,%ymm15         # Set shift = 0 for K-Reduction
 
-xor		%eax,%eax
-_looptop2:
-pointwise	0
+# Load polynomials (16 coefficients, 64 bytes)
+vmovdqa     (%rsi),%ymm2                 # a0: a[0..7]
+vmovdqa     32(%rsi),%ymm3               # a1: a[8..15]
+vmovdqa     (%rdx),%ymm4                 # b0: b[0..7]
+vmovdqa     32(%rdx),%ymm5               # b1: b[8..15]
 
-#mov
-vmovdqa		%ymm6,%ymm2
-vmovdqa		%ymm7,%ymm3
-vmovdqa		%ymm8,%ymm4
-vmovdqa		%ymm9,%ymm5
+# Karatsuba multiplication
+pointwise_mul 2,3,4,5,6,7
 
-pointwise	1024
-acc
-
-#if L >= 3
-pointwise	2048
-acc
-#endif
-
-#if L >= 4
-pointwise	3072
-acc
-#endif
-
-#if L >= 5
-pointwise	4096
-acc
-#endif
-
-#if L >= 6
-pointwise	5120
-acc
-#endif
-
-#if L >= 7
-pointwise	6144
-acc
-#endif
-
-#reduce
-vpmuldq		%ymm0,%ymm2,%ymm6
-vpmuldq		%ymm0,%ymm3,%ymm7
-vpmuldq		%ymm0,%ymm4,%ymm8
-vpmuldq		%ymm0,%ymm5,%ymm9
-vpmuldq		%ymm1,%ymm6,%ymm6
-vpmuldq		%ymm1,%ymm7,%ymm7
-vpmuldq		%ymm1,%ymm8,%ymm8
-vpmuldq		%ymm1,%ymm9,%ymm9
-vpsubq		%ymm6,%ymm2,%ymm2
-vpsubq		%ymm7,%ymm3,%ymm3
-vpsubq		%ymm8,%ymm4,%ymm4
-vpsubq		%ymm9,%ymm5,%ymm5
-vpsrlq		$32,%ymm2,%ymm2
-vmovshdup	%ymm4,%ymm4
-
-#store
-vpblendd	$0xAA,%ymm3,%ymm2,%ymm2
-vpblendd	$0xAA,%ymm5,%ymm4,%ymm4
-
-vmovdqa		%ymm2,(%rdi)
-vmovdqa		%ymm4,32(%rdi)
-
-add		$64,%rsi
-add		$64,%rdx
-add		$64,%rdi
-add		$1,%eax
-cmp		$16,%eax
-jb _looptop2
+# Store results
+vmovdqa     %ymm6,(%rdi)                 # c[0..7]
+vmovdqa     %ymm7,32(%rdi)               # c[8..15]
 
 ret
+
+# Note: Toom-Cook (Toom-3) implementation for 16 points would split into 3 parts:
+# - Divide polynomials into a2*x^12 + a1*x^6 + a0, evaluate at points (0, 1, -1, 2, infinity).
+# - Perform 5 pointwise multiplications, interpolate results.
+# - For 16 coefficients, Karatsuba is more efficient due to lower overhead.
+# - Toom-3 pseudo-code:
+#   a0 = a[0..5], a1 = a[6..11], a2 = a[12..15] (pad zeros)
+#   Evaluate a(x) at x = 0, 1, -1, 2, inf
+#   Multiply pointwise at each evaluation point
+#   Interpolate to reconstruct c(x)
+#   Apply K-Reduction to each coefficient.
 
 .section .note.GNU-stack,"",@progbits
